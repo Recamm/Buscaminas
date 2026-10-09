@@ -1,0 +1,20 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {generateBoard,seededRandom,neighbors,countAdjacent,emptyBoard,revealRegion} from '../js/game/engine.js';
+import {createGame,gameReducer} from '../js/game/reducer.js';
+import {validateConfig} from '../js/game/config.js';
+import {defaults,parseSaved,improveRecord,loadSaved,saveData} from '../js/storage/persistence.js';
+const config={rows:5,cols:5,mines:1};
+const reveal=(s,i)=>gameReducer(s,{type:'reveal',index:i,now:1000,seed:42});
+function fixture(mines,opened=[],flags=[]){const c={...config,mines:mines.length};return {...createGame(c,'custom'),generated:true,status:'playing',startedAt:100,cells:countAdjacent(emptyBoard(c).map((cell,i)=>({...cell,mine:mines.includes(i),revealed:opened.includes(i),flagged:flags.includes(i)})),c)};}
+for(const c of [{rows:9,cols:9,mines:10},{rows:16,cols:16,mines:40},{rows:16,cols:30,mines:99}])test(`Minas exactas ${c.mines}`,()=>{const a=generateBoard(c,0,seededRandom(1));assert.equal(a.filter(x=>x.mine).length,c.mines);assert.deepEqual(a,generateBoard(c,0,seededRandom(1)));});
+for(const first of [0,4,20,24,2,10,14,22,12])test(`Primera jugada segura ${first}`,()=>{for(let seed=0;seed<30;seed++){const b=generateBoard({...config,mines:8},first,seededRandom(seed));for(const i of [first,...neighbors(first,config)])assert.equal(b[i].mine,false);}});
+test('Conteos y bordes',()=>{const b=fixture([0,4,6,12,18,24]).cells;for(let i=0;i<25;i++)assert.equal(b[i].adjacent,[0,4,6,12,18,24].filter(m=>m!==i&&Math.abs(Math.floor(m/5)-Math.floor(i/5))<=1&&Math.abs(m%5-i%5)<=1).length);});
+test('Expansión respeta banderas',()=>{const s=fixture([24],[],[0]);const r=revealRegion(s.cells,config,[6]);assert.equal(r.cells.filter(c=>c.revealed).length,23);assert.equal(r.cells[0].revealed,false);assert.equal(s.cells[6].revealed,false);});
+test('Victoria, derrota y bloqueo',()=>{for(const s of [reveal(fixture([24]),0),reveal(fixture([24]),24)]){assert.equal(s.endedAt,1000);assert.equal(reveal(s,1),s);assert.equal(gameReducer(s,{type:'flag',index:1}),s);}assert.equal(reveal(fixture([24]),0).status,'won');assert.equal(reveal(fixture([24]),24).status,'lost');});
+test('Apertura rápida correcta e incorrecta',()=>{assert.equal(reveal(fixture([0],[6],[0]),6).status,'won');assert.equal(reveal(fixture([0],[6],[5]),6).status,'lost');const s=fixture([0],[6]);assert.equal(reveal(s,6),s);});
+test('Detonación prevalece sobre apertura de últimas casillas',()=>{const s=fixture([0],Array.from({length:25},(_,i)=>i).filter(i=>![0,2,5].includes(i)),[5]);const n=reveal(s,6);assert.equal(n.cells[2].revealed,true);assert.equal(n.status,'lost');});
+test('Banderas no generan minas ni inician tiempo; contador negativo',()=>{let s=createGame(config,'custom');for(let i=0;i<3;i++)s=gameReducer(s,{type:'flag',index:i});assert.equal(s.generated,false);assert.equal(s.startedAt,null);assert.equal(reveal(s,0),s);assert.equal(config.mines-s.cells.filter(c=>c.flagged).length,-2);});
+test('Reinicio limpia la partida',()=>{const s=reveal(fixture([24]),24);const n=gameReducer(s,{type:'reset',config,difficulty:'custom'});assert.equal(n.status,'ready');assert.equal(n.startedAt,null);assert.equal(n.endedAt,null);assert.equal(n.generated,false);assert.equal(n.round,s.round+1);});
+test('Validación entera y límites',()=>{for(const c of [{rows:4,cols:5,mines:1},{rows:31,cols:5,mines:1},{rows:5,cols:5,mines:9},{rows:5,cols:5,mines:1.5},{rows:NaN,cols:5,mines:1}])assert.ok(validateConfig(c).length);assert.deepEqual(validateConfig({rows:30,cols:30,mines:315}),[]);});
+test('Persistencia inválida y mejores récords',()=>{for(const raw of ['{bad','null','42'])assert.deepEqual(parseSaved(raw),defaults());const s=improveRecord(defaults(),'easy',1000);assert.equal(improveRecord(s,'easy',2000),s);assert.equal(improveRecord(s,'custom',1),s);assert.equal(improveRecord(s,'easy',500).records.easy,500);globalThis.window={get localStorage(){throw Error('disabled');}};assert.deepEqual(loadSaved(),defaults());assert.doesNotThrow(()=>saveData(s));delete globalThis.window;});
